@@ -2,90 +2,89 @@ const express = require('express');
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 
-// Cloudflare ve Bot korumasını atlatmak için gizlilik eklentisi
 puppeteer.use(StealthPlugin());
 
 const app = express();
 app.use(express.json());
 
+// Zaman aşımı ayarları (90 saniye)
+const TIMEOUT = 90000; 
+
 app.post('/get-messages', async (req, res) => {
     const { username, password } = req.body;
+    let browser;
     
     if (!username || !password) {
-        return res.status(400).json({ error: 'Kullanıcı adı ve şifre gerekli' });
+        return res.status(400).json({ error: 'Eksik bilgi' });
     }
 
-    console.log('Bot başlatılıyor...');
-    let browser;
-
     try {
+        console.log('Bot başlatılıyor...');
         browser = await puppeteer.launch({
-            headless: "new", // Tarayıcıyı arkaplanda çalıştır
+            headless: "new",
             args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
                 '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--no-first-run',
-                '--no-zygote',
-                '--disable-gpu'
+                '--window-size=1920,1080'
             ],
-            executablePath: '/usr/bin/google-chrome' // Docker içindeki Chrome yolu
+            executablePath: '/usr/bin/google-chrome'
         });
 
         const page = await browser.newPage();
         
-        // Bot tespit edilmemesi için User-Agent ayarı
+        // Genel zaman aşımını artır
+        page.setDefaultNavigationTimeout(TIMEOUT);
+
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36');
 
         console.log('Giriş sayfasına gidiliyor...');
-        await page.goto('https://secure.sahibinden.com/giris', { waitUntil: 'networkidle2' });
+        await page.goto('https://secure.sahibinden.com/giris', { waitUntil: 'domcontentloaded' });
 
-        // Giriş bilgilerini doldur (Selector'lar değişebilir, kontrol edilmeli)
-        console.log('Giriş yapılıyor...');
-        await page.type('#username', username, { delay: 100 }); // İnsansı yazma hızı
+        console.log('Bilgiler giriliyor...');
+        // Selector'ların yüklenmesini bekle
+        await page.waitForSelector('#username', { visible: true });
+        
+        await page.type('#username', username, { delay: 100 });
         await page.type('#password', password, { delay: 100 });
         
+        console.log('Giriş butonuna basılıyor...');
+        
+        // Navigation hatasını önlemek için Promise.all kullanımı
         await Promise.all([
-            page.click('#userLoginSubmitButton'), // Giriş butonu ID'si
-            page.waitForNavigation({ waitUntil: 'networkidle2' }),
+            page.click('#userLoginSubmitButton'),
+            // networkidle2 yerine domcontentloaded kullanıyoruz (daha hızlı ve az hata verir)
+            page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: TIMEOUT }),
         ]);
 
-        console.log('Mesajlar sayfasına gidiliyor...');
-        await page.goto('https://banaozel.sahibinden.com/mesajlarim', { waitUntil: 'networkidle2' });
+        console.log('Mesajlar sayfasına geçiliyor...');
+        // Giriş sonrası yönlendirmeyi bekle
+        await page.goto('https://banaozel.sahibinden.com/mesajlarim', { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
 
-        // Mesaj listesini HTML'den çek (Basit bir örnek selector)
-        const messages = await page.evaluate(() => {
-            // Bu kısım tarayıcı içinde çalışır (DOM manipülasyonu)
-            const msgElements = document.querySelectorAll('.message-list-item'); // Sınıf adı örnektir
-            const data = [];
-            
-            msgElements.forEach(el => {
-                const sender = el.querySelector('.sender-name')?.innerText;
-                const preview = el.querySelector('.message-preview')?.innerText;
-                const date = el.querySelector('.message-date')?.innerText;
-                
-                if(sender) {
-                    data.push({ sender, preview, date });
-                }
-            });
-            return data;
+        // Sayfa başlığını al
+        const pageTitle = await page.title();
+        const content = await page.content();
+
+        // Basit bir kontrol: Giriş yapıldı mı?
+        if (content.includes("Giriş Yap") || content.includes("Üye Ol")) {
+            console.log("Giriş başarısız olabilir, hala giriş ekranı görünüyor.");
+            return res.json({ success: false, message: "Giriş yapılamadı veya Captcha çıktı.", title: pageTitle });
+        }
+
+        console.log('İşlem Başarılı!');
+        res.json({ 
+            success: true, 
+            title: pageTitle, 
+            message: "Mesajlar sayfasına erişildi." 
+            // İstersen buraya content'i de ekleyebilirsin ama çok uzun olur
         });
 
-        console.log(`${messages.length} mesaj bulundu.`);
-        res.json({ success: true, data: messages });
-
     } catch (error) {
-        console.error('Hata:', error);
+        console.error('Hata Detayı:', error);
         res.status(500).json({ success: false, error: error.message });
     } finally {
-        if (browser) {
-            await browser.close();
-        }
+        if (browser) await browser.close();
     }
 });
 
-const PORT = 3000;
-app.listen(PORT, () => {
-    console.log(`Sahibinden Bridge ${PORT} portunda çalışıyor`);
-});
+app.listen(3000, () => console.log('Sahibinden Bridge 3000 portunda (v2 - 90sn timeout) aktif.'));
