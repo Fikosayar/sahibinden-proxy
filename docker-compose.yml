@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+  sahibinden-api:
+    build: .
+    container_name: sahibinden_bridge
+    ports:
+      - "3005:3000" # Sunucunuzun 3005 portunu açar
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
